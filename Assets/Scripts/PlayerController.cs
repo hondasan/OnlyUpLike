@@ -1,3 +1,4 @@
+using System.Collections;
 using UnityEngine;
 
 [RequireComponent(typeof(Rigidbody))]
@@ -17,12 +18,31 @@ public class PlayerController : MonoBehaviour
     public float fallY = -10f;          // この高さより下に落ちたら
     public Transform respawnPoint;      // 戻る地点
 
+    [Header("Recovery")]
+    [Tooltip("リスポーン直後の入力ロック時間")]
+    public float inputDisableDuration = 0.15f; // --- Added for respawn stability
 
     Rigidbody rb;
     Vector3 inputDir;
     bool isGrounded;
 
-    void Awake() => rb = GetComponent<Rigidbody>();
+    // --- Added fields for respawn stability ---
+    Vector3 initialPosition;
+    Quaternion initialRotation;
+    bool inputLocked;
+    Coroutine inputLockRoutine;
+    int fallCount;
+
+    // --- Added for HUD hookup ---
+    public event System.Action<int> Respawned;
+    public int FallCount => fallCount;
+
+    void Awake()
+    {
+        rb = GetComponent<Rigidbody>();
+        initialPosition = transform.position;
+        initialRotation = transform.rotation;
+    }
 
     void Update()
     {
@@ -31,16 +51,23 @@ public class PlayerController : MonoBehaviour
         float v = Input.GetAxisRaw("Vertical");
 
         // カメラ基準で移動方向を決めると直感的
-        var camF = Camera.main.transform.forward; camF.y = 0; camF.Normalize();
-        var camR = Camera.main.transform.right;  camR.y = 0; camR.Normalize();
-        inputDir = (camF * v + camR * h).normalized;
+        var cam = Camera.main;
+        Vector3 camF = cam != null ? cam.transform.forward : Vector3.forward;
+        Vector3 camR = cam != null ? cam.transform.right : Vector3.right;
+        camF.y = 0; camF.Normalize();
+        camR.y = 0; camR.Normalize();
 
-        // 接地判定（足元に小さな球）
-        Vector3 origin = transform.position + Vector3.up * groundCheckOffset;
-        isGrounded = Physics.CheckSphere(origin + Vector3.down * groundCheckOffset, groundCheckRadius, groundMask);
+        inputDir = inputLocked ? Vector3.zero : (camF * v + camR * h).normalized;
+
+        // 接地判定（足元に球を置く）
+        LayerMask mask = groundMask.value == 0 ? ~0 : groundMask;
+        float radius = Mathf.Max(0.01f, groundCheckRadius);
+        float extraOffset = Mathf.Max(radius, 0.05f);
+        Vector3 checkCenter = transform.position + Vector3.down * (groundCheckOffset + extraOffset);
+        isGrounded = Physics.CheckSphere(checkCenter, radius, mask, QueryTriggerInteraction.Ignore);
 
         // ジャンプ
-        if (Input.GetButtonDown("Jump") && isGrounded)
+        if (!inputLocked && Input.GetButtonDown("Jump") && isGrounded)
         {
             var v0 = rb.linearVelocity; if (v0.y < 0) v0.y = 0; rb.linearVelocity = v0;
             rb.AddForce(Vector3.up * jumpForce, ForceMode.VelocityChange);
@@ -72,24 +99,52 @@ public class PlayerController : MonoBehaviour
     void OnDrawGizmosSelected()
     {
         Gizmos.color = Color.yellow;
-        Vector3 origin = transform.position + Vector3.up * groundCheckOffset;
-        Gizmos.DrawWireSphere(origin + Vector3.down * groundCheckOffset, groundCheckRadius);
+        float radius = Mathf.Max(0.01f, groundCheckRadius);
+        float extraOffset = Mathf.Max(radius, 0.05f);
+        Vector3 checkCenter = transform.position + Vector3.down * (groundCheckOffset + extraOffset);
+        Gizmos.DrawWireSphere(checkCenter, radius);
     }
 
     void Respawn()
     {
+        Vector3 targetPosition;
+        Quaternion targetRotation;
+
         if (respawnPoint != null)
         {
-            rb.linearVelocity = Vector3.zero;
-            transform.position = respawnPoint.position;
-            transform.rotation = respawnPoint.rotation;
+            targetPosition = respawnPoint.position;
+            targetRotation = respawnPoint.rotation;
         }
         else
         {
             // 保険：RespawnPointが未設定でも初期位置に戻す
-            rb.linearVelocity = Vector3.zero;
-            transform.position = new Vector3(0, 1, 0);
+            targetPosition = initialPosition;
+            targetRotation = initialRotation;
         }
+
+        // --- Added resets for stability ---
+        rb.linearVelocity = Vector3.zero;
+        rb.velocity = Vector3.zero;
+        rb.angularVelocity = Vector3.zero;
+        transform.SetPositionAndRotation(targetPosition, targetRotation);
+        inputDir = Vector3.zero;
+        isGrounded = false;
+
+        fallCount++;
+        Respawned?.Invoke(fallCount);
+
+        if (inputLockRoutine != null)
+        {
+            StopCoroutine(inputLockRoutine);
+        }
+        inputLockRoutine = StartCoroutine(DisableInputTemporarily(inputDisableDuration));
     }
 
+    IEnumerator DisableInputTemporarily(float duration)
+    {
+        inputLocked = true;
+        yield return new WaitForSeconds(duration);
+        inputLocked = false;
+        inputLockRoutine = null;
+    }
 }
