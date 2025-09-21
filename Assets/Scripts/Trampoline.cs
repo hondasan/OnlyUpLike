@@ -60,12 +60,12 @@ public class Trampoline : MonoBehaviour
         }
 
         Vector3 dir = bounceDirection.sqrMagnitude > 0.0001f ? bounceDirection.normalized : Vector3.up;
-        Vector3 velocity = body.velocity;
+        Vector3 velocity = body.linearVelocity;
         float along = Vector3.Dot(velocity, dir);
         if (along < 0f)
         {
             velocity -= dir * along;
-            body.velocity = velocity;
+            body.linearVelocity = velocity;
         }
 
         body.AddForce(dir * bounce, ForceMode.VelocityChange);
