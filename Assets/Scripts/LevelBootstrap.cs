@@ -1,35 +1,116 @@
-using System.Collections.Generic;
 using UnityEngine;
 
 public class LevelBootstrap : MonoBehaviour
 {
-    [Header("Course Layout")]
-    [SerializeField] int minPlatforms = 8;
-    [SerializeField] int maxPlatforms = 10;
-    [SerializeField] Vector2 heightStepRange = new Vector2(1.1f, 1.9f);
-    [SerializeField] Vector2 forwardStepRange = new Vector2(2.5f, 3.8f);
-    [SerializeField] Vector2 platformSizeRange = new Vector2(2.5f, 4.2f);
-    [SerializeField] float platformThickness = 0.6f;
-    [SerializeField] float lateralSpread = 2.2f;
-    [SerializeField] string generatedRootName = "GeneratedCourseRoot";
+    [Header("Generation")]
+    public int totalSteps = 60;
+    public float baseStepHeight = 1.6f;
+    public float heightVariance = 0.35f;
+    public float stepDistance = 5f;
+    public float angleStepDegrees = 32f;
+    public Vector2 platformSizeRange = new Vector2(2.8f, 4.5f);
+    public float platformThickness = 0.6f;
+    public float horizontalJitter = 1.2f;
+    public Vector3 startPlatformSize = new Vector3(6f, 0.6f, 6f);
+    public int seed = 1234;
+    public string generatedRootName = "GeneratedCourseRoot";
+    public bool rebuildOnStart = true;
+
+    [Header("Checkpoints")]
+    public int checkpointEvery = 10;
+    public float checkpointHeightOffset = 1.3f;
+
+    [Header("Gimmick Probability")]
+    [Range(0f, 1f)] public float movingChance = 0.12f;
+    [Range(0f, 1f)] public float rotatingChance = 0.2f;
+    [Range(0f, 1f)] public float breakableChance = 0.18f;
+    [Range(0f, 1f)] public float trampolineChance = 0.12f;
+    [Range(0f, 1f)] public float windChance = 0.1f;
+    [Range(0f, 1f)] public float icyChance = 0.15f;
+
+    [Header("Wind Settings")]
+    public Vector3 windZoneSize = new Vector3(4f, 3f, 4f);
+
+    System.Random rng;
 
     void Start()
     {
+        if (rebuildOnStart)
+        {
+            BuildCourse();
+        }
+        else
+        {
+            PrepareRoot();
+        }
+    }
+
+    public void BuildCourse()
+    {
         Transform root = PrepareRoot();
-        var player = FindObjectOfType<PlayerController>();
-
-        if (player != null && player.GetComponent<PlatformRider>() == null)
+        if (root == null)
         {
-            player.gameObject.AddComponent<PlatformRider>();
+            return;
         }
 
-        if (FindObjectOfType<GameHUD>() == null)
+        var player = EnsurePlayer();
+        EnsureHud();
+        EnsureSfxManager();
+
+        if (totalSteps < 1)
         {
-            var hudObject = new GameObject("GameHUD");
-            hudObject.AddComponent<GameHUD>();
+            totalSteps = 1;
         }
 
-        GenerateCourse(root, player);
+        rng = CreateRandom(seed);
+
+        GameObject startPlatform = CreatePlatform(root, Vector3.zero, startPlatformSize, 0, "StartPlatform");
+
+        if (player != null)
+        {
+            if (player.GetComponent<PlatformRider>() == null)
+            {
+                player.gameObject.AddComponent<PlatformRider>();
+            }
+
+            if (player.respawnPoint == null)
+            {
+                player.respawnPoint = startPlatform.transform;
+            }
+        }
+
+        GameObject previousPlatform = startPlatform;
+
+        for (int i = 1; i < totalSteps; i++)
+        {
+            float angle = Mathf.Deg2Rad * angleStepDegrees * i;
+            Vector3 radial = new Vector3(Mathf.Cos(angle), 0f, Mathf.Sin(angle));
+            Vector3 horizontal = radial * stepDistance;
+            Vector3 jitter = new Vector3(RandomRange(-horizontalJitter, horizontalJitter), 0f, RandomRange(-horizontalJitter, horizontalJitter));
+
+            float height = baseStepHeight * i + RandomRange(-heightVariance, heightVariance);
+            Vector3 position = horizontal + jitter;
+            position.y = height;
+
+            float sizeX = RandomRange(platformSizeRange.x, platformSizeRange.y);
+            float sizeZ = RandomRange(platformSizeRange.x, platformSizeRange.y);
+            Vector3 scale = new Vector3(sizeX, platformThickness, sizeZ);
+
+            GameObject platform = CreatePlatform(root, position, scale, i, $"Platform_{i:000}");
+            DecoratePlatform(platform, root, i);
+
+            if (checkpointEvery > 0 && i % checkpointEvery == 0)
+            {
+                CreateCheckpoint(root, platform.transform.position + Vector3.up * (checkpointHeightOffset + platform.transform.localScale.y * 0.5f), i);
+            }
+
+            previousPlatform = platform;
+        }
+
+        if (previousPlatform != null)
+        {
+            CreateGoal(previousPlatform.transform.position + Vector3.up * 3.5f, root);
+        }
     }
 
     Transform PrepareRoot()
@@ -63,179 +144,231 @@ public class LevelBootstrap : MonoBehaviour
         }
     }
 
-    void GenerateCourse(Transform root, PlayerController player)
+    System.Random CreateRandom(int seedValue)
     {
-        if (root == null)
-        {
-            return;
-        }
-
-        int targetCount = Mathf.Clamp(Random.Range(minPlatforms, maxPlatforms + 1), minPlatforms, maxPlatforms);
-        if (targetCount <= 0)
-        {
-            return;
-        }
-
-        Vector3 anchor = Vector3.zero;
-        if (player != null)
-        {
-            anchor = player.respawnPoint != null ? player.respawnPoint.position : player.transform.position;
-        }
-
-        float currentHeight = Mathf.Max(anchor.y + 0.8f, 1f);
-        float currentForward = anchor.z + 4f;
-        float baseX = anchor.x;
-
-        var platforms = new List<GameObject>(targetCount);
-
-        for (int i = 0; i < targetCount; i++)
-        {
-            float heightStep = Random.Range(heightStepRange.x, heightStepRange.y);
-            if (i == 0)
-            {
-                heightStep = Mathf.Clamp(heightStep, heightStepRange.x * 0.5f, heightStepRange.y);
-            }
-
-            currentHeight += heightStep;
-            currentForward += Random.Range(forwardStepRange.x, forwardStepRange.y);
-
-            float lateral = baseX + Random.Range(-lateralSpread, lateralSpread);
-            Vector3 position = new Vector3(lateral, currentHeight, currentForward);
-            float sizeX = Random.Range(platformSizeRange.x, platformSizeRange.y);
-            float sizeZ = Random.Range(platformSizeRange.x, platformSizeRange.y);
-            Vector3 scale = new Vector3(sizeX, platformThickness, sizeZ);
-
-            GameObject platform = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            platform.name = $"Platform_{i:00}";
-            platform.transform.SetParent(root, false);
-            platform.transform.position = position;
-            platform.transform.localScale = scale;
-
-            platforms.Add(platform);
-        }
-
-        if (platforms.Count == 0)
-        {
-            return;
-        }
-
-        int movingIndex = SetupMovingPlatform(platforms, root);
-        SetupIcePlatform(platforms, movingIndex);
-        SetupCheckpoints(platforms, root);
+        return seedValue == 0 ? new System.Random() : new System.Random(seedValue);
     }
 
-    int SetupMovingPlatform(List<GameObject> platforms, Transform root)
+    float RandomRange(float min, float max)
     {
-        if (platforms.Count < 2)
+        if (rng == null)
         {
-            return -1;
+            rng = CreateRandom(seed);
         }
 
-        int movingIndex = Mathf.Clamp(platforms.Count / 2, 1, platforms.Count - 1);
-        GameObject platform = platforms[movingIndex];
+        return Mathf.Lerp(min, max, (float)rng.NextDouble());
+    }
+
+    GameObject CreatePlatform(Transform root, Vector3 position, Vector3 scale, int index, string name)
+    {
+        GameObject platform = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        platform.name = name;
+        platform.transform.SetParent(root, false);
+        platform.transform.position = position;
+        platform.transform.localScale = scale;
+
+        var renderer = platform.GetComponent<Renderer>();
+        if (renderer != null)
+        {
+            Color baseColor = Color.Lerp(new Color(0.4f, 0.7f, 1f), new Color(1f, 0.8f, 0.6f), Mathf.Repeat(index * 0.21f, 1f));
+            renderer.material.color = baseColor;
+        }
+
+        return platform;
+    }
+
+    void DecoratePlatform(GameObject platform, Transform root, int index)
+    {
+        if (platform == null)
+        {
+            return;
+        }
+
+        bool addedMoving = false;
+        if (RandomRange(0f, 1f) < movingChance)
+        {
+            addedMoving = SetupMovingPlatform(platform, root);
+        }
+
+        if (!addedMoving && RandomRange(0f, 1f) < rotatingChance)
+        {
+            var rotating = platform.AddComponent<RotatingPlatform>();
+            rotating.degreesPerSecond = RandomRange(35f, 90f) * (RandomRange(0f, 1f) > 0.5f ? 1f : -1f);
+            rotating.axis = Vector3.up;
+        }
+
+        bool addedBreakable = false;
+        if (!addedMoving && RandomRange(0f, 1f) < breakableChance)
+        {
+            var breakable = platform.AddComponent<BreakablePlatform>();
+            breakable.delay = RandomRange(0.4f, 1.1f);
+            breakable.cooldown = RandomRange(2.5f, 4.5f);
+            TintPlatform(platform, new Color(1f, 0.65f, 0.5f));
+            addedBreakable = true;
+        }
+
+        if (!addedBreakable && RandomRange(0f, 1f) < trampolineChance)
+        {
+            var trampoline = platform.AddComponent<Trampoline>();
+            trampoline.bounce = RandomRange(11f, 15f);
+            trampoline.cooldown = RandomRange(0.2f, 0.4f);
+            TintPlatform(platform, new Color(0.5f, 1f, 0.5f));
+        }
+
+        if (RandomRange(0f, 1f) < windChance)
+        {
+            CreateWindVolume(root, platform.transform.position, index);
+        }
+
+        if (RandomRange(0f, 1f) < icyChance)
+        {
+            EnsurePhysicsMaterials.ApplyIce(platform.GetComponent<Collider>());
+            TintPlatform(platform, new Color(0.7f, 0.9f, 1f));
+        }
+    }
+
+    bool SetupMovingPlatform(GameObject platform, Transform root)
+    {
+        if (platform == null || root == null)
+        {
+            return false;
+        }
+
         var mover = platform.AddComponent<MovingPlatform>();
+        mover.speed = RandomRange(1.5f, 3.5f);
+        mover.startAtPointA = RandomRange(0f, 1f) > 0.5f;
 
-        Vector3 basePosition = platform.transform.position;
-        Vector3 travel = new Vector3(2.5f, 0f, 0f);
+        Vector3 travelDir = new Vector3(RandomRange(-1f, 1f), 0f, RandomRange(-1f, 1f));
+        if (travelDir.sqrMagnitude < 0.001f)
+        {
+            travelDir = Vector3.right;
+        }
+        travelDir.Normalize();
+        float travelDistance = RandomRange(2f, 4f);
+        Vector3 travel = travelDir * travelDistance;
 
-        var pointAObj = new GameObject(platform.name + "_PointA");
-        pointAObj.transform.SetParent(root, false);
-        pointAObj.transform.position = basePosition - travel * 0.5f;
+        Vector3 pointA = platform.transform.position - travel * 0.5f;
+        Vector3 pointB = platform.transform.position + travel * 0.5f;
 
-        var pointBObj = new GameObject(platform.name + "_PointB");
-        pointBObj.transform.SetParent(root, false);
-        pointBObj.transform.position = basePosition + travel * 0.5f;
-
-        mover.pointA = pointAObj.transform;
-        mover.pointB = pointBObj.transform;
-        mover.speed = 2.2f;
-        mover.startAtPointA = true;
-
-        return movingIndex;
+        mover.pointA = CreateAnchor(root, platform.name + "_PointA", pointA);
+        mover.pointB = CreateAnchor(root, platform.name + "_PointB", pointB);
+        return true;
     }
 
-    void SetupIcePlatform(List<GameObject> platforms, int movingIndex)
+    Transform CreateAnchor(Transform root, string name, Vector3 position)
     {
-        if (platforms.Count == 0)
+        var anchorObj = new GameObject(name);
+        anchorObj.transform.SetParent(root, false);
+        anchorObj.transform.position = position;
+        return anchorObj.transform;
+    }
+
+    void TintPlatform(GameObject platform, Color color)
+    {
+        if (platform == null)
         {
             return;
         }
 
-        int iceIndex = Mathf.Max(0, platforms.Count - 2);
-        if (iceIndex == movingIndex)
-        {
-            iceIndex = Mathf.Max(0, iceIndex - 1);
-        }
-
-        GameObject icePlatform = platforms[Mathf.Clamp(iceIndex, 0, platforms.Count - 1)];
-        var collider = icePlatform.GetComponent<Collider>();
-        EnsurePhysicsMaterials.ApplyIce(collider);
-
-        var renderer = icePlatform.GetComponent<Renderer>();
+        var renderer = platform.GetComponent<Renderer>();
         if (renderer != null)
         {
-            var mat = renderer.material;
-            mat.color = new Color(0.6f, 0.8f, 1f, 1f);
+            renderer.material.color = color;
         }
     }
 
-    void SetupCheckpoints(List<GameObject> platforms, Transform root)
+    void CreateWindVolume(Transform root, Vector3 position, int index)
     {
-        if (platforms.Count < 2)
+        var windObj = new GameObject($"WindZone_{index:000}");
+        windObj.transform.SetParent(root, false);
+        windObj.transform.position = position + Vector3.up * (windZoneSize.y * 0.5f + 0.5f);
+
+        var box = windObj.AddComponent<BoxCollider>();
+        box.size = windZoneSize;
+        box.isTrigger = true;
+
+        var wind = windObj.AddComponent<WindZoneVolume>();
+        wind.forceDirection = new Vector3(RandomRange(-0.4f, 0.4f), RandomRange(0.2f, 0.8f), RandomRange(-0.4f, 0.4f));
+        wind.strength = RandomRange(3f, 7f);
+    }
+
+    void CreateCheckpoint(Transform root, Vector3 position, int index)
+    {
+        GameObject checkpointRoot = new GameObject($"Checkpoint_{index:000}");
+        checkpointRoot.transform.SetParent(root, false);
+        checkpointRoot.transform.position = position;
+
+        var trigger = checkpointRoot.AddComponent<SphereCollider>();
+        trigger.isTrigger = true;
+        trigger.radius = 0.7f;
+        checkpointRoot.AddComponent<Checkpoint>();
+
+        GameObject marker = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        marker.name = "Marker";
+        marker.transform.SetParent(checkpointRoot.transform, false);
+        marker.transform.localScale = new Vector3(0.35f, 1.4f, 0.35f);
+        var renderer = marker.GetComponent<Renderer>();
+        if (renderer != null)
         {
-            return;
+            renderer.material.color = new Color(0.9f, 0.8f, 0.3f);
         }
 
-        var indices = new HashSet<int>();
-        indices.Add(1);
-        indices.Add(platforms.Count / 2);
-        if (platforms.Count > 4)
+        var markerCollider = marker.GetComponent<Collider>();
+        if (markerCollider != null)
         {
-            indices.Add(Mathf.Max(1, platforms.Count - 2));
-        }
-
-        foreach (int index in indices)
-        {
-            if (index < 0 || index >= platforms.Count)
+            if (Application.isPlaying)
             {
-                continue;
+                Destroy(markerCollider);
             }
-
-            GameObject platform = platforms[index];
-            Vector3 platformTop = platform.transform.position + Vector3.up * (platform.transform.localScale.y * 0.5f + 0.8f);
-
-            GameObject checkpointRoot = new GameObject($"Checkpoint_{index:00}");
-            checkpointRoot.transform.SetParent(root, false);
-            checkpointRoot.transform.position = platformTop;
-            checkpointRoot.transform.localScale = Vector3.one * 0.8f;
-
-            var trigger = checkpointRoot.AddComponent<SphereCollider>();
-            trigger.isTrigger = true;
-            trigger.radius = 0.6f;
-            checkpointRoot.AddComponent<Checkpoint>();
-
-            CreateCheckpointVisual(checkpointRoot.transform);
+#if UNITY_EDITOR
+            else
+            {
+                DestroyImmediate(markerCollider);
+            }
+#endif
         }
     }
 
-    void CreateCheckpointVisual(Transform parent)
+    void CreateGoal(Vector3 position, Transform root)
     {
-        GameObject visual = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-        visual.name = "Marker";
-        visual.transform.SetParent(parent, false);
-        visual.transform.localScale = new Vector3(0.3f, 1.2f, 0.3f);
-
-        var renderer = visual.GetComponent<Renderer>();
+        GameObject goal = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        goal.name = "Goal";
+        goal.transform.SetParent(root, false);
+        goal.transform.position = position;
+        goal.transform.localScale = new Vector3(2f, 2f, 2f);
+        var renderer = goal.GetComponent<Renderer>();
         if (renderer != null)
         {
-            var mat = renderer.material;
-            mat.color = new Color(1f, 0.8f, 0.2f, 1f);
+            renderer.material.color = new Color(1f, 0.6f, 0.2f);
         }
-
-        var collider = visual.GetComponent<Collider>();
+        var collider = goal.GetComponent<Collider>();
         if (collider != null)
         {
-            Destroy(collider);
+            collider.isTrigger = true;
+        }
+    }
+
+    PlayerController EnsurePlayer()
+    {
+        return FindObjectOfType<PlayerController>();
+    }
+
+    void EnsureHud()
+    {
+        if (FindObjectOfType<GameHUD>() == null)
+        {
+            var hudObject = new GameObject("GameHUD");
+            hudObject.AddComponent<GameHUD>();
+        }
+    }
+
+    void EnsureSfxManager()
+    {
+        if (FindObjectOfType<SFXManager>() == null)
+        {
+            var sfxObject = new GameObject("SFXManager");
+            sfxObject.AddComponent<AudioSource>();
+            sfxObject.AddComponent<SFXManager>();
         }
     }
 }
