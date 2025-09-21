@@ -2,7 +2,7 @@ using UnityEngine;
 
 public class EnsurePhysicsMaterials : MonoBehaviour
 {
-    static PhysicMaterial iceMaterial;
+    static PhysicsMaterial iceMaterial;
 
     [Tooltip("設定したColliderにPM_Iceを適用します。空なら自身を利用")] 
     public Collider target;
@@ -20,16 +20,16 @@ public class EnsurePhysicsMaterials : MonoBehaviour
         }
     }
 
-    public static PhysicMaterial GetIceMaterial()
+    public static PhysicsMaterial GetIceMaterial()
     {
         if (iceMaterial == null)
         {
-            iceMaterial = new PhysicMaterial("PM_Ice")
+            iceMaterial = new PhysicsMaterial("PM_Ice")
             {
                 dynamicFriction = 0.1f,
                 staticFriction = 0.1f,
-                frictionCombine = PhysicMaterialCombine.Minimum,
-                bounceCombine = PhysicMaterialCombine.Minimum,
+                frictionCombine = PhysicsMaterialCombine.Minimum,
+                bounceCombine = PhysicsMaterialCombine.Minimum,
                 bounciness = 0f
             };
         }

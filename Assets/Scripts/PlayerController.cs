@@ -1,6 +1,7 @@
 using System.Collections;
 using UnityEngine;
 
+
 [RequireComponent(typeof(Rigidbody))]
 public class PlayerController : MonoBehaviour
 {
@@ -117,14 +118,12 @@ public class PlayerController : MonoBehaviour
         }
         else
         {
-            // 保険：RespawnPointが未設定でも初期位置に戻す
             targetPosition = initialPosition;
             targetRotation = initialRotation;
         }
 
-        // --- Added resets for stability ---
+        // --- リセット処理 ---
         rb.linearVelocity = Vector3.zero;
-        rb.velocity = Vector3.zero;
         rb.angularVelocity = Vector3.zero;
         transform.SetPositionAndRotation(targetPosition, targetRotation);
         inputDir = Vector3.zero;
