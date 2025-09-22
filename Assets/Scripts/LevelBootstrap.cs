@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 public class LevelBootstrap : MonoBehaviour
@@ -16,6 +17,24 @@ public class LevelBootstrap : MonoBehaviour
     public string generatedRootName = "GeneratedCourseRoot";
     public bool rebuildOnStart = true;
 
+    [Header("Difficulty Curve")]
+    [Tooltip("Number of early steps that should be wide and easy to land on.")]
+    public int easyStepCount = 10;
+    public Vector2 easyPlatformSizeRange = new Vector2(5.5f, 7.5f);
+    public float easyStepDistance = 3.2f;
+    public float easyHorizontalJitter = 0.5f;
+    public float easyHeightVariance = 0.15f;
+    [Tooltip("Step index from which moving/rotating/breakable gimmicks may appear.")]
+    public int gimmickStartStep = 6;
+    [Tooltip("Step index that marks the start of the hardest platforms.")]
+    public int lateDifficultyStart = 32;
+    public Vector2 latePlatformSizeRange = new Vector2(2.2f, 3.4f);
+    public float farStepDistance = 8.5f;
+    public float farHorizontalJitter = 2.2f;
+    public float farHeightVarianceMultiplier = 1.6f;
+    public float spiralRadiusStart = 4f;
+    public float spiralRadiusEnd = 30f;
+
     [Header("Checkpoints")]
     public int checkpointEvery = 10;
     public float checkpointHeightOffset = 1.3f;
@@ -30,6 +49,19 @@ public class LevelBootstrap : MonoBehaviour
 
     [Header("Wind Settings")]
     public Vector3 windZoneSize = new Vector3(4f, 3f, 4f);
+
+    [Header("Projectile Spawner")]
+    public bool enableProjectileSpawner = true;
+    public float projectileSpawnHeightOffset = 6f;
+    public float projectileSpawnDistanceOffset = 8f;
+    public int projectilePoolSize = 8;
+    public float projectileFireInterval = 4f;
+    public float projectileInitialDelay = 1.5f;
+    public float projectileSpeed = 14f;
+    public float projectileLifetime = 8f;
+    public float projectileScale = 1.1f;
+    public float projectileAimVariance = 1.4f;
+    public float projectileKnockbackForce = 6f;
 
     System.Random rng;
 
@@ -64,7 +96,10 @@ public class LevelBootstrap : MonoBehaviour
 
         rng = CreateRandom(seed);
 
+        var platformPositions = new List<Vector3>();
+
         GameObject startPlatform = CreatePlatform(root, Vector3.zero, startPlatformSize, 0, "StartPlatform");
+        platformPositions.Add(startPlatform.transform.position);
 
         if (player != null)
         {
@@ -85,19 +120,48 @@ public class LevelBootstrap : MonoBehaviour
         {
             float angle = Mathf.Deg2Rad * angleStepDegrees * i;
             Vector3 radial = new Vector3(Mathf.Cos(angle), 0f, Mathf.Sin(angle));
-            Vector3 horizontal = radial * stepDistance;
-            Vector3 jitter = new Vector3(RandomRange(-horizontalJitter, horizontalJitter), 0f, RandomRange(-horizontalJitter, horizontalJitter));
+            float totalStepsMinusOne = Mathf.Max(1, totalSteps - 1);
+            float normalizedIndex = i / totalStepsMinusOne;
+            float difficultyProgress = Mathf.Clamp01((i - easyStepCount) / Mathf.Max(1, totalSteps - easyStepCount));
+            float difficultyEase = Mathf.SmoothStep(0f, 1f, difficultyProgress);
 
-            float height = baseStepHeight * i + RandomRange(-heightVariance, heightVariance);
-            Vector3 position = horizontal + jitter;
+            float radius = Mathf.Lerp(spiralRadiusStart, spiralRadiusEnd, Mathf.SmoothStep(0f, 1f, normalizedIndex));
+            float distanceTarget = Mathf.Lerp(stepDistance, farStepDistance, difficultyEase);
+            float currentStepDistance = Mathf.Lerp(easyStepDistance, distanceTarget, difficultyEase);
+
+            Vector3 previousPosition = previousPlatform != null ? previousPlatform.transform.position : Vector3.zero;
+            Vector3 alongPath = previousPosition + radial * currentStepDistance;
+            Vector3 outward = radial * radius;
+            Vector3 basePosition = Vector3.Lerp(alongPath, outward, Mathf.SmoothStep(0f, 1f, normalizedIndex));
+
+            float jitterTarget = Mathf.Lerp(horizontalJitter, farHorizontalJitter, difficultyEase);
+            float currentHorizontalJitter = Mathf.Lerp(easyHorizontalJitter, jitterTarget, difficultyEase);
+            Vector3 jitter = new Vector3(RandomRange(-currentHorizontalJitter, currentHorizontalJitter), 0f, RandomRange(-currentHorizontalJitter, currentHorizontalJitter));
+
+            float heightVarianceTarget = heightVariance * Mathf.Lerp(1f, farHeightVarianceMultiplier, difficultyEase);
+            float currentHeightVariance = Mathf.Lerp(easyHeightVariance, heightVarianceTarget, difficultyEase);
+            float height = baseStepHeight * i + RandomRange(-currentHeightVariance, currentHeightVariance);
+
+            Vector3 position = basePosition + jitter;
             position.y = height;
 
-            float sizeX = RandomRange(platformSizeRange.x, platformSizeRange.y);
-            float sizeZ = RandomRange(platformSizeRange.x, platformSizeRange.y);
+            Vector2 sizeRange = easyPlatformSizeRange;
+            if (i >= lateDifficultyStart)
+            {
+                sizeRange = latePlatformSizeRange;
+            }
+            else if (i >= easyStepCount)
+            {
+                sizeRange = platformSizeRange;
+            }
+
+            float sizeX = RandomRange(sizeRange.x, sizeRange.y);
+            float sizeZ = RandomRange(sizeRange.x, sizeRange.y);
             Vector3 scale = new Vector3(sizeX, platformThickness, sizeZ);
 
             GameObject platform = CreatePlatform(root, position, scale, i, $"Platform_{i:000}");
             DecoratePlatform(platform, root, i);
+            platformPositions.Add(position);
 
             if (checkpointEvery > 0 && i % checkpointEvery == 0)
             {
@@ -105,6 +169,11 @@ public class LevelBootstrap : MonoBehaviour
             }
 
             previousPlatform = platform;
+        }
+
+        if (enableProjectileSpawner)
+        {
+            CreateProjectileSpawner(root, platformPositions, player != null ? player.transform : null);
         }
 
         if (previousPlatform != null)
@@ -180,6 +249,11 @@ public class LevelBootstrap : MonoBehaviour
     void DecoratePlatform(GameObject platform, Transform root, int index)
     {
         if (platform == null)
+        {
+            return;
+        }
+
+        if (index < gimmickStartStep)
         {
             return;
         }
@@ -370,5 +444,42 @@ public class LevelBootstrap : MonoBehaviour
             sfxObject.AddComponent<AudioSource>();
             sfxObject.AddComponent<SFXManager>();
         }
+    }
+
+    void CreateProjectileSpawner(Transform root, List<Vector3> positions, Transform target)
+    {
+        if (!enableProjectileSpawner || root == null || positions == null || positions.Count < 2)
+        {
+            return;
+        }
+
+        int index = Mathf.Clamp(Mathf.RoundToInt(positions.Count * 0.55f), 1, positions.Count - 1);
+        Vector3 anchor = positions[index];
+        Vector3 lookTarget = positions[Mathf.Min(index + 2, positions.Count - 1)];
+
+        Vector3 outward = anchor - Vector3.zero;
+        if (outward.sqrMagnitude < 0.01f)
+        {
+            outward = Vector3.forward;
+        }
+
+        Vector3 spawnPosition = anchor + outward.normalized * projectileSpawnDistanceOffset + Vector3.up * projectileSpawnHeightOffset;
+
+        var spawnerObject = new GameObject("ProjectileSpawner");
+        spawnerObject.transform.SetParent(root, false);
+        spawnerObject.transform.position = spawnPosition;
+        spawnerObject.transform.forward = (lookTarget - spawnPosition).sqrMagnitude > 0.01f ? (lookTarget - spawnPosition).normalized : outward.normalized;
+
+        var spawner = spawnerObject.AddComponent<ProjectileSpawner>();
+        spawner.poolSize = projectilePoolSize;
+        spawner.fireInterval = projectileFireInterval;
+        spawner.initialDelay = projectileInitialDelay;
+        spawner.projectileSpeed = projectileSpeed;
+        spawner.projectileLifetime = projectileLifetime;
+        spawner.projectileScale = projectileScale;
+        spawner.aimVariance = projectileAimVariance;
+        spawner.knockbackForce = projectileKnockbackForce;
+        spawner.SetTarget(target);
+        spawner.ResetTimer();
     }
 }
